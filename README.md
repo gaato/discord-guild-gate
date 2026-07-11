@@ -48,11 +48,14 @@ needed: membership is checked with `GET /users/@me/guilds` using the
 ## File Browser setup
 
 ```
-filebrowser config set --auth.method=proxy --auth.header=X-Username
+filebrowser config set --auth.method=proxy --auth.header=X-Username \
+  --auth.logoutPage=/auth/logout
 ```
 
 Create the shared accounts (e.g. `ja2026`) beforehand. Switching to
-proxy auth disables password login.
+proxy auth disables password login. `--auth.logoutPage=/auth/logout`
+makes File Browser's own logout button clear the gate session instead
+of instantly re-authenticating via the header.
 
 ## Container image
 
