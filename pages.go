@@ -89,6 +89,9 @@ func (a *app) title(lang string) string {
 
 // groupDisplay renders the picker button text for a group label.
 func (a *app) groupDisplay(lang, label string) string {
+	if name, ok := a.cfg.groupNames[label]; ok {
+		return name
+	}
 	tmpl := a.cfg.groupNameEN
 	if lang == "ja" {
 		tmpl = a.cfg.groupNameJA

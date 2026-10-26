@@ -98,10 +98,46 @@ func TestParseUsers(t *testing.T) {
 	if len(us) != 2 || us[0].Label != "alice" || us[1].UserID != "456" {
 		t.Fatalf("unexpected: %+v", us)
 	}
-	for _, bad := range []string{"123", "admin=123", "a=1,a=2"} {
+	for _, bad := range []string{"123", "admin=123", "a=1,a=1"} {
 		if _, err := parseUsers(bad); err == nil {
 			t.Errorf("parseUsers(%q) should fail", bad)
 		}
+	}
+	// a repeated label with other IDs is one shared group
+	us, err = parseUsers("alice=1,team=1,team=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(us) != 3 || us[2].Label != "team" || us[2].UserID != "2" {
+		t.Fatalf("shared label: %+v", us)
+	}
+}
+
+func TestParseGroupNames(t *testing.T) {
+	c := &config{
+		guilds: []guildEntry{{Label: "2026", GuildID: "111"}},
+		users:  []userEntry{{Label: "koinrandolly", UserID: "1"}},
+	}
+	names, err := parseGroupNames("koinrandolly=コインランドリー, 2026 = Project 2026 ,", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names["koinrandolly"] != "コインランドリー" || names["2026"] != "Project 2026" {
+		t.Fatalf("unexpected: %q", names)
+	}
+	for _, bad := range []string{"koinrandolly", "=x", "nobody=x"} {
+		if _, err := parseGroupNames(bad, c); err == nil {
+			t.Errorf("parseGroupNames(%q) should fail", bad)
+		}
+	}
+	a := testApp(t, "http://upstream")
+	a.cfg.groupNameJA = "企画{label}"
+	a.cfg.groupNames = names
+	if got := a.groupDisplay("ja", "koinrandolly"); got != "コインランドリー" {
+		t.Fatalf("named: %q", got)
+	}
+	if got := a.groupDisplay("ja", "2027"); got != "企画2027" {
+		t.Fatalf("template fallback: %q", got)
 	}
 }
 

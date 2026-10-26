@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -85,7 +86,7 @@ func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, u := range a.cfg.users {
-		if u.UserID == user.ID {
+		if u.UserID == user.ID && !slices.Contains(groups, u.Label) {
 			groups = append(groups, u.Label)
 		}
 	}

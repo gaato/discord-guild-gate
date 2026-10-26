@@ -42,12 +42,13 @@ selected group's account name is forwarded to the upstream in the
 | `GATE_COOKIE_SECRET` | `openssl rand -hex 32` | Session signing key (32+ chars) |
 | `GATE_UPSTREAM` | `http://127.0.0.1:8080` | Upstream URL |
 | `GATE_GUILDS` | `2026=1386…,2027=1525…` | Comma-separated `label=guildID`; picker order = config order. `admin` is a reserved label |
-| `GATE_USERS` | `alice=1234…,bob=5678…` | Comma-separated `label=discordUserID`, listed after the guilds in the picker. Labels must not repeat a `GATE_GUILDS` label. At least one of `GATE_GUILDS` and `GATE_USERS` is required |
+| `GATE_USERS` | `alice=1234…,bob=5678…,team=1234…,team=5678…` | Comma-separated `label=discordUserID`, listed after the guilds in the picker. Repeat a label with other IDs to put those users in one shared group. Labels must not repeat a `GATE_GUILDS` label. At least one of `GATE_GUILDS` and `GATE_USERS` is required |
 | `GATE_USERNAME_TEMPLATE` | `{lang}{label}` | Upstream account name template; placeholders `{label}`, `{lang}` and `{user_id}` (Discord user ID) (default `{label}`) |
 | `GATE_ADMIN_DISCORD_IDS` | `123,456` | Discord user IDs allowed to pick `admin` (optional) |
 | `GATE_SESSION_TTL` | `24h` | Session lifetime (default `24h`); guild membership is re-checked on expiry |
 | `GATE_TITLE_JA` / `GATE_TITLE_EN` | `My Uploader` | Page title per language (default `Discord Guild Gate`) |
 | `GATE_GROUP_NAME_JA` / `GATE_GROUP_NAME_EN` | `Project {label}` | Picker button text template, `{label}` placeholder (default `{label}`) |
+| `GATE_GROUP_NAMES` | `team=Our team` | Comma-separated `label=display name` for the picker, in both languages, overriding the templates for those labels. Each label must be configured in `GATE_GUILDS` or `GATE_USERS` |
 | `GATE_ACCENT` | `#5865f2` | Accent color for buttons/links (hex) |
 
 ## Discord application setup

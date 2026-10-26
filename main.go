@@ -35,7 +35,7 @@ type config struct {
 	cookieSecret []byte
 	upstream     *url.URL
 	guilds       []guildEntry // picker order = config order
-	users        []userEntry  // allowlisted Discord users, listed after guilds
+	users        []userEntry  // allowlisted Discord users, listed after guilds; a label may repeat
 	usernameTmpl string       // "{label}" / "{lang}" / "{user_id}" placeholders
 	adminIDs     map[string]bool
 	sessionTTL   time.Duration
@@ -43,7 +43,8 @@ type config struct {
 	titleEN      string
 	groupNameJA  string // display template, "{label}" placeholder
 	groupNameEN  string
-	accent       string // CSS hex color for buttons/links
+	groupNames   map[string]string // per-label display name, overrides the templates
+	accent       string            // CSS hex color for buttons/links
 }
 
 var accentRe = regexp.MustCompile(`^#[0-9a-fA-F]{3,8}$`)
@@ -91,6 +92,10 @@ func loadConfig() (*config, error) {
 	if len(c.guilds) == 0 && len(c.users) == 0 {
 		return nil, fmt.Errorf("set GATE_GUILDS, GATE_USERS or both")
 	}
+	c.groupNames, err = parseGroupNames(os.Getenv("GATE_GROUP_NAMES"), c)
+	if err != nil {
+		return nil, err
+	}
 	// one picker and one template namespace, so a label names one group
 	for _, u := range c.users {
 		for _, g := range c.guilds {
@@ -117,7 +122,7 @@ func isSep(r rune) bool { return r == ',' || r == ';' || r == ' ' }
 // parseGuilds reads "2026=1386246992589619231,2027=..." keeping config order
 // (the picker lists groups in this order).
 func parseGuilds(s string) ([]guildEntry, error) {
-	pairs, err := parseLabeled("GATE_GUILDS", "guildID", s)
+	pairs, err := parseLabeled("GATE_GUILDS", "guildID", s, false)
 	if err != nil {
 		return nil, err
 	}
@@ -129,9 +134,10 @@ func parseGuilds(s string) ([]guildEntry, error) {
 }
 
 // parseUsers reads "alice=123456789012345678,..."; the label is the
-// account name under the {label} template.
+// account name under the {label} template. Repeating a label with other
+// user IDs puts those users in one shared group.
 func parseUsers(s string) ([]userEntry, error) {
-	pairs, err := parseLabeled("GATE_USERS", "discordUserID", s)
+	pairs, err := parseLabeled("GATE_USERS", "discordUserID", s, true)
 	if err != nil {
 		return nil, err
 	}
@@ -143,9 +149,12 @@ func parseUsers(s string) ([]userEntry, error) {
 }
 
 // parseLabeled reads comma-separated label=value pairs in config order.
-func parseLabeled(name, value, s string) ([][2]string, error) {
+// With repeat, a label may appear again with another value, but the same
+// pair twice is still rejected as a likely typo.
+func parseLabeled(name, value, s string, repeat bool) ([][2]string, error) {
 	var out [][2]string
 	seen := map[string]bool{}
+	seenPair := map[[2]string]bool{}
 	for _, pair := range strings.FieldsFunc(s, isSep) {
 		label, v, ok := strings.Cut(pair, "=")
 		if !ok || label == "" || v == "" {
@@ -154,11 +163,43 @@ func parseLabeled(name, value, s string) ([][2]string, error) {
 		if label == "admin" {
 			return nil, fmt.Errorf(`%s label "admin" is reserved`, name)
 		}
-		if seen[label] {
-			return nil, fmt.Errorf("duplicate %s label: %q", name, label)
+		p := [2]string{label, v}
+		if (seen[label] && !repeat) || seenPair[p] {
+			return nil, fmt.Errorf("duplicate %s entry: %q", name, pair)
 		}
 		seen[label] = true
-		out = append(out, [2]string{label, v})
+		seenPair[p] = true
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// parseGroupNames reads "label=Display name,..." for the picker. Only
+// commas separate entries, so a display name may contain spaces.
+func parseGroupNames(s string, c *config) (map[string]string, error) {
+	labels := map[string]bool{}
+	for _, g := range c.guilds {
+		labels[g.Label] = true
+	}
+	for _, u := range c.users {
+		labels[u.Label] = true
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		label, display, ok := strings.Cut(pair, "=")
+		label, display = strings.TrimSpace(label), strings.TrimSpace(display)
+		if !ok || label == "" || display == "" {
+			return nil, fmt.Errorf("invalid GATE_GROUP_NAMES entry: %q (want label=display name)", pair)
+		}
+		// a typo would otherwise leave the raw label on the picker unnoticed
+		if !labels[label] {
+			return nil, fmt.Errorf("GATE_GROUP_NAMES label %q is not in GATE_GUILDS or GATE_USERS", label)
+		}
+		out[label] = display
 	}
 	return out, nil
 }
