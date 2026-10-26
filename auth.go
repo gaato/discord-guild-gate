@@ -124,7 +124,7 @@ func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
 	a.setSession(w, s)
 	log.Printf("login: %s (%s) groups=%v admin=%v lang=%s", user.Username, user.ID, groups, admin, s.Lang)
 
-	if s.Group == "" {
+	if s.Group == "" && a.cfg.groupsHeader == "" {
 		http.Redirect(w, r, "/pick?next="+url.QueryEscape(next), http.StatusFound)
 		return
 	}

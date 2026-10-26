@@ -3,7 +3,8 @@
 // auth.method=proxy). It signs users in with Discord OAuth2
 // (identify guilds), maps their guild memberships, or their user ID on an
 // allowlist, to configured groups, and forwards the selected group's
-// account name to the upstream in the X-Username header.
+// account name to the upstream in the X-Username header (or, with
+// GATE_GROUPS_HEADER, the user's own name plus all their groups).
 package main
 
 import (
@@ -44,10 +45,15 @@ type config struct {
 	groupNameJA  string // display template, "{label}" placeholder
 	groupNameEN  string
 	groupNames   map[string]string // per-label display name, overrides the templates
+	groupsHeader string            // if set, all groups go upstream in this header and there is no picker
+	publicPaths  []string          // path prefixes proxied without authentication
 	accent       string            // CSS hex color for buttons/links
 }
 
 var accentRe = regexp.MustCompile(`^#[0-9a-fA-F]{3,8}$`)
+
+// File Browser's public share links and the static assets they load.
+const defaultPublicPaths = "/share/,/api/public/,/static/"
 
 func loadConfig() (*config, error) {
 	c := &config{
@@ -62,6 +68,8 @@ func loadConfig() (*config, error) {
 		groupNameJA:  envOr("GATE_GROUP_NAME_JA", "{label}"),
 		groupNameEN:  envOr("GATE_GROUP_NAME_EN", "{label}"),
 		accent:       envOr("GATE_ACCENT", "#5865f2"),
+		groupsHeader: http.CanonicalHeaderKey(os.Getenv("GATE_GROUPS_HEADER")),
+		publicPaths:  strings.FieldsFunc(envOr("GATE_PUBLIC_PATHS", defaultPublicPaths), isSep),
 	}
 	c.clientSecret = os.Getenv("DISCORD_CLIENT_SECRET")
 	c.cookieSecret = []byte(os.Getenv("GATE_COOKIE_SECRET"))
@@ -95,6 +103,21 @@ func loadConfig() (*config, error) {
 	c.groupNames, err = parseGroupNames(os.Getenv("GATE_GROUP_NAMES"), c)
 	if err != nil {
 		return nil, err
+	}
+	if c.groupsHeader != "" {
+		// without a picker no group is selected, so {label} would be empty
+		// and every user would share one blank account name
+		if strings.Contains(c.usernameTmpl, "{label}") || !strings.Contains(c.usernameTmpl, "{user_id}") {
+			return nil, fmt.Errorf("with GATE_GROUPS_HEADER, GATE_USERNAME_TEMPLATE must contain {user_id} and not {label}")
+		}
+		if c.groupsHeader == "X-Username" {
+			return nil, fmt.Errorf("GATE_GROUPS_HEADER must differ from X-Username")
+		}
+	}
+	for _, p := range c.publicPaths {
+		if !strings.HasPrefix(p, "/") || !strings.HasSuffix(p, "/") || p == "/" {
+			return nil, fmt.Errorf("GATE_PUBLIC_PATHS entry %q must start and end with / and not be / itself", p)
+		}
 	}
 	// one picker and one template namespace, so a label names one group
 	for _, u := range c.users {
@@ -252,10 +275,13 @@ func envOr(name, def string) string {
 
 // gateway proxies authorized requests to the upstream.
 func (a *app) gateway(w http.ResponseWriter, r *http.Request) {
-	// always drop the client-supplied header so it cannot be spoofed
+	// always drop the client-supplied headers so they cannot be spoofed
 	r.Header.Del("X-Username")
+	if a.cfg.groupsHeader != "" {
+		r.Header.Del(a.cfg.groupsHeader)
+	}
 
-	if isExempt(r.URL.Path) {
+	if a.isExempt(r.URL.Path) {
 		a.proxy.ServeHTTP(w, r)
 		return
 	}
@@ -263,6 +289,14 @@ func (a *app) gateway(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.readSession(r)
 	if !ok {
 		a.requireLogin(w, r)
+		return
+	}
+	if a.cfg.groupsHeader != "" {
+		r.Header.Set("X-Username", a.usernameFor(s))
+		if len(s.Groups) > 0 {
+			r.Header.Set(a.cfg.groupsHeader, strings.Join(s.Groups, ","))
+		}
+		a.proxy.ServeHTTP(w, r)
 		return
 	}
 	if s.Group == "" {
@@ -285,15 +319,16 @@ func (a *app) requireLogin(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "authentication required", http.StatusUnauthorized)
 }
 
-// isExempt lists paths served without authentication
-// (File Browser public share links and static assets).
-func isExempt(path string) bool {
-	for _, p := range []string{"/share/", "/api/public/", "/static/"} {
-		if strings.HasPrefix(path, p) {
+// isExempt reports paths served without authentication: by default File
+// Browser's public share links and static assets. A prefix "/x/" also
+// matches "/x" itself.
+func (a *app) isExempt(path string) bool {
+	for _, p := range a.cfg.publicPaths {
+		if strings.HasPrefix(path, p) || path == strings.TrimSuffix(p, "/") {
 			return true
 		}
 	}
-	return path == "/share"
+	return false
 }
 
 // usernameFor derives the upstream account name from the session.

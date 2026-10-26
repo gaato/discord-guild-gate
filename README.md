@@ -27,7 +27,7 @@ selected group's account name is forwarded to the upstream in the
   `admin` account.
 - File Browser public share links (`/share/*`, `/api/public/*`,
   `/static/*`) are proxied without authentication.
-- The client-supplied `X-Username` header is always dropped. Deploy the
+- The client-supplied `X-Username` header (and `GATE_GROUPS_HEADER`) is always dropped. Deploy the
   upstream so it is **only reachable through this gate**
   (same pod / localhost only), otherwise the header can be spoofed.
 
@@ -50,6 +50,8 @@ selected group's account name is forwarded to the upstream in the
 | `GATE_GROUP_NAME_JA` / `GATE_GROUP_NAME_EN` | `Project {label}` | Picker button text template, `{label}` placeholder (default `{label}`) |
 | `GATE_GROUP_NAMES` | `team=Our team` | Comma-separated `label=display name` for the picker, in both languages, overriding the templates for those labels. Each label must be configured in `GATE_GUILDS` or `GATE_USERS` |
 | `GATE_ACCENT` | `#5865f2` | Accent color for buttons/links (hex) |
+| `GATE_GROUPS_HEADER` | `X-Groups` | If set, every request carries all of the user's group labels, comma-separated, in this header, and `X-Username` carries the user's own name; there is no picker. For upstreams that do group-based access themselves, such as copyparty (`--idp-h-usr x-username --idp-h-grp x-groups`). `GATE_USERNAME_TEMPLATE` must then contain `{user_id}` and not `{label}`. `GATE_ADMIN_DISCORD_IDS` only lets those users in; the upstream decides what they may do |
+| `GATE_PUBLIC_PATHS` | `/share/,/.cpr/` | Path prefixes proxied without authentication, each starting and ending with `/` (default: File Browser's `/share/,/api/public/,/static/`). copyparty needs its `--shr` folder and `/.cpr/` |
 
 ## Discord application setup
 

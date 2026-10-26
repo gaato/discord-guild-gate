@@ -23,6 +23,7 @@ func testApp(t *testing.T, upstream string) *app {
 			{Label: "2026", GuildID: "111"},
 		},
 		usernameTmpl: "{lang}{label}",
+		publicPaths:  strings.Split(defaultPublicPaths, ","),
 		adminIDs:     map[string]bool{"42": true},
 		sessionTTL:   time.Hour,
 	}
@@ -218,15 +219,79 @@ func TestUsernameFor(t *testing.T) {
 }
 
 func TestIsExempt(t *testing.T) {
+	a := testApp(t, "http://upstream")
 	for _, p := range []string{"/share/abc", "/api/public/dl/abc/f.png", "/static/js/app.js", "/share"} {
-		if !isExempt(p) {
+		if !a.isExempt(p) {
 			t.Errorf("%s should be exempt", p)
 		}
 	}
 	for _, p := range []string{"/", "/files/2026", "/api/resources/", "/sharex", "/api/users"} {
-		if isExempt(p) {
+		if a.isExempt(p) {
 			t.Errorf("%s should NOT be exempt", p)
 		}
+	}
+	a.cfg.publicPaths = []string{"/share/", "/.cpr/"}
+	if !a.isExempt("/.cpr/ui.css") || a.isExempt("/static/js/app.js") {
+		t.Error("GATE_PUBLIC_PATHS not applied")
+	}
+}
+
+// With GATE_GROUPS_HEADER the user's own name and all groups go upstream,
+// no group needs picking, and spoofed values are dropped everywhere.
+func TestGatewayGroupsHeader(t *testing.T) {
+	type seen struct{ user, groups string }
+	var got []seen
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, seen{r.Header.Get("X-Username"), r.Header.Get("X-Groups")})
+	}))
+	defer upstream.Close()
+	a := testApp(t, upstream.URL)
+	a.cfg.groupsHeader = "X-Groups"
+	a.cfg.usernameTmpl = "{user_id}"
+	a.cfg.publicPaths = []string{"/share/"}
+
+	req := httptest.NewRequest("GET", "/share/abc", nil)
+	req.Header.Set("X-Groups", "team")
+	a.gateway(httptest.NewRecorder(), req)
+
+	s := &session{UserID: "123", Groups: []string{"team", "2026"}, Lang: "ja",
+		Exp: time.Now().Add(time.Hour).Unix()}
+	req = httptest.NewRequest("GET", "/team/", nil)
+	req.Header.Set("X-Groups", "admin")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: a.signSession(s)})
+	rec := httptest.NewRecorder()
+	a.gateway(rec, req)
+
+	want := []seen{{"", ""}, {"123", "team,2026"}}
+	if rec.Code == http.StatusFound || len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("code %d, upstream saw %+v", rec.Code, got)
+	}
+}
+
+func TestLoadConfigGroupsHeader(t *testing.T) {
+	t.Setenv("GATE_BASE_URL", "https://files.example.com")
+	t.Setenv("DISCORD_CLIENT_ID", "id")
+	t.Setenv("DISCORD_CLIENT_SECRET", "secret")
+	t.Setenv("GATE_COOKIE_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("GATE_UPSTREAM", "http://127.0.0.1:3923")
+	t.Setenv("GATE_USERS", "team=1")
+	t.Setenv("GATE_GROUPS_HEADER", "x-groups")
+	t.Setenv("GATE_USERNAME_TEMPLATE", "{label}")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("{label} with GATE_GROUPS_HEADER should fail")
+	}
+	t.Setenv("GATE_USERNAME_TEMPLATE", "{user_id}")
+	t.Setenv("GATE_PUBLIC_PATHS", "/share/,/.cpr/")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.groupsHeader != "X-Groups" || len(c.publicPaths) != 2 {
+		t.Fatalf("unexpected: %q %q", c.groupsHeader, c.publicPaths)
+	}
+	t.Setenv("GATE_PUBLIC_PATHS", "/")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("GATE_PUBLIC_PATHS=/ should fail")
 	}
 }
 
