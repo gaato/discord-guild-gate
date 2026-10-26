@@ -26,10 +26,12 @@ selected group's account name is forwarded to the upstream in the
 - Discord users listed in `GATE_ADMIN_DISCORD_IDS` can also select the
   `admin` account.
 - File Browser public share links (`/share/*`, `/api/public/*`,
-  `/static/*`) are proxied without authentication.
-- The client-supplied `X-Username` header (and `GATE_GROUPS_HEADER`) is always dropped. Deploy the
-  upstream so it is **only reachable through this gate**
-  (same pod / localhost only), otherwise the header can be spoofed.
+  `/static/*`) are proxied without authentication; `GATE_PUBLIC_PATHS`
+  changes the list for other upstreams.
+- The client-supplied `X-Username` header, and the `GATE_GROUPS_HEADER`
+  one, are always dropped. Deploy the upstream so it is **only reachable
+  through this gate** (same pod / localhost only), otherwise the headers
+  can be spoofed.
 
 ## Environment variables
 
