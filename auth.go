@@ -138,7 +138,11 @@ func (a *app) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handlePickPage(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.readSession(r)
+	if ok {
+		ok = a.refresh(s)
+	}
 	if !ok {
+		clearSession(w)
 		http.Redirect(w, r, "/auth/login", http.StatusFound)
 		return
 	}
@@ -151,7 +155,11 @@ func (a *app) handlePickPage(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handlePickSubmit(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.readSession(r)
+	if ok {
+		ok = a.refresh(s)
+	}
 	if !ok {
+		clearSession(w)
 		http.Redirect(w, r, "/auth/login", http.StatusFound)
 		return
 	}

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -287,7 +288,11 @@ func (a *app) gateway(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s, ok := a.readSession(r)
+	if ok {
+		ok = a.refresh(s)
+	}
 	if !ok {
+		clearSession(w)
 		a.requireLogin(w, r)
 		return
 	}
@@ -305,6 +310,35 @@ func (a *app) gateway(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Header.Set("X-Username", a.usernameFor(s))
 	a.proxy.ServeHTTP(w, r)
+}
+
+// refresh recomputes a session's access from the current config, so a
+// config change applies at once instead of when the session expires:
+// allowlist labels and admin rights come from the config alone, and guild
+// labels from the session are kept only while still configured (their
+// membership is re-checked with Discord at the next login). A selected
+// group that is gone is dropped. It reports false when nothing is left.
+func (a *app) refresh(s *session) bool {
+	var groups []string
+	for _, g := range a.cfg.guilds {
+		if slices.Contains(s.Groups, g.Label) {
+			groups = append(groups, g.Label)
+		}
+	}
+	for _, u := range a.cfg.users {
+		if u.UserID == s.UserID && !slices.Contains(groups, u.Label) {
+			groups = append(groups, u.Label)
+		}
+	}
+	s.Groups = groups
+	s.Admin = a.cfg.adminIDs[s.UserID]
+	if !s.mayPick(s.Group) {
+		s.Group = ""
+	}
+	if s.Group == "" && len(groups) == 1 && !s.Admin {
+		s.Group = groups[0]
+	}
+	return len(groups) > 0 || s.Admin
 }
 
 func (a *app) requireLogin(w http.ResponseWriter, r *http.Request) {

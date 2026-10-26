@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -249,6 +250,7 @@ func TestGatewayGroupsHeader(t *testing.T) {
 	a.cfg.groupsHeader = "X-Groups"
 	a.cfg.usernameTmpl = "{user_id}"
 	a.cfg.publicPaths = []string{"/share/"}
+	a.cfg.users = []userEntry{{Label: "team", UserID: "123"}}
 
 	req := httptest.NewRequest("GET", "/share/abc", nil)
 	req.Header.Set("X-Groups", "team")
@@ -262,7 +264,7 @@ func TestGatewayGroupsHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.gateway(rec, req)
 
-	want := []seen{{"", ""}, {"123", "team,2026"}}
+	want := []seen{{"", ""}, {"123", "2026,team"}}
 	if rec.Code == http.StatusFound || len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("code %d, upstream saw %+v", rec.Code, got)
 	}
@@ -366,5 +368,67 @@ func TestGatewayUnauthenticated(t *testing.T) {
 	a.gateway(rec, httptest.NewRequest("POST", "/api/resources/x", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("POST: got %d", rec.Code)
+	}
+}
+
+// Access follows the current config, not the one at login.
+func TestRefresh(t *testing.T) {
+	a := testApp(t, "http://upstream")
+	a.cfg.users = []userEntry{{Label: "team", UserID: "7"}}
+
+	// a guild label still configured stays, a dropped one goes, and an
+	// allowlist label added since login appears
+	s := &session{UserID: "7", Groups: []string{"2026", "2019"}, Group: "2019"}
+	if !a.refresh(s) || !slices.Equal(s.Groups, []string{"2026", "team"}) || s.Group != "" {
+		t.Fatalf("after refresh: %+v", s)
+	}
+
+	// removed from the allowlist and from every configured guild: no access
+	gone := &session{UserID: "8", Groups: []string{"team", "2019"}, Group: "team"}
+	if a.refresh(gone) {
+		t.Fatalf("removed user kept access: %+v", gone)
+	}
+
+	// admin rights are not taken from the cookie
+	fake := &session{UserID: "8", Admin: true, Group: "admin"}
+	if a.refresh(fake) || fake.Group != "" {
+		t.Fatalf("cookie admin kept: %+v", fake)
+	}
+	real := &session{UserID: "42", Group: "admin"}
+	if !a.refresh(real) || !real.Admin || real.Group != "admin" {
+		t.Fatalf("configured admin lost: %+v", real)
+	}
+
+	// one group left and no admin: selected without the picker
+	one := &session{UserID: "7"}
+	a.cfg.guilds = nil
+	if !a.refresh(one) || one.Group != "team" {
+		t.Fatalf("single group not selected: %+v", one)
+	}
+}
+
+// A session from before a config change must not carry old groups upstream.
+func TestGatewayDropsStaleGroups(t *testing.T) {
+	var groups []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		groups = append(groups, r.Header.Get("X-Groups"))
+	}))
+	defer upstream.Close()
+	a := testApp(t, upstream.URL)
+	a.cfg.guilds = nil
+	a.cfg.users = []userEntry{{Label: "team", UserID: "7"}}
+	a.cfg.groupsHeader = "X-Groups"
+	a.cfg.usernameTmpl = "{user_id}"
+
+	for _, s := range []*session{
+		{UserID: "7", Groups: []string{"oldlabel"}, Exp: time.Now().Add(time.Hour).Unix()},
+		{UserID: "9", Groups: []string{"team"}, Exp: time.Now().Add(time.Hour).Unix()},
+	} {
+		req := httptest.NewRequest("GET", "/team/", nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: a.signSession(s)})
+		a.gateway(httptest.NewRecorder(), req)
+	}
+	if !slices.Equal(groups, []string{"team"}) {
+		t.Fatalf("upstream saw groups %q", groups)
 	}
 }
