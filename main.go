@@ -1,9 +1,9 @@
 // discord-guild-gate is an authorization gateway that fronts a private
 // web app trusting a username header (e.g. File Browser with
 // auth.method=proxy). It signs users in with Discord OAuth2
-// (identify guilds), maps their guild memberships to configured groups,
-// and forwards the selected group's shared account name to the upstream
-// in the X-Username header.
+// (identify guilds), maps their guild memberships, or their user ID on an
+// allowlist, to configured groups, and forwards the selected group's
+// account name to the upstream in the X-Username header.
 package main
 
 import (
@@ -22,6 +22,11 @@ type guildEntry struct {
 	GuildID string
 }
 
+type userEntry struct {
+	Label  string
+	UserID string
+}
+
 type config struct {
 	listen       string
 	baseURL      string
@@ -30,7 +35,8 @@ type config struct {
 	cookieSecret []byte
 	upstream     *url.URL
 	guilds       []guildEntry // picker order = config order
-	usernameTmpl string       // "{label}" / "{lang}" placeholders
+	users        []userEntry  // allowlisted Discord users, listed after guilds
+	usernameTmpl string       // "{label}" / "{lang}" / "{user_id}" placeholders
 	adminIDs     map[string]bool
 	sessionTTL   time.Duration
 	titleJA      string
@@ -58,7 +64,7 @@ func loadConfig() (*config, error) {
 	}
 	c.clientSecret = os.Getenv("DISCORD_CLIENT_SECRET")
 	c.cookieSecret = []byte(os.Getenv("GATE_COOKIE_SECRET"))
-	for _, name := range []string{"GATE_BASE_URL", "DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "GATE_COOKIE_SECRET", "GATE_UPSTREAM", "GATE_GUILDS"} {
+	for _, name := range []string{"GATE_BASE_URL", "DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "GATE_COOKIE_SECRET", "GATE_UPSTREAM"} {
 		if os.Getenv(name) == "" {
 			return nil, fmt.Errorf("environment variable %s is not set", name)
 		}
@@ -78,6 +84,21 @@ func loadConfig() (*config, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.users, err = parseUsers(os.Getenv("GATE_USERS"))
+	if err != nil {
+		return nil, err
+	}
+	if len(c.guilds) == 0 && len(c.users) == 0 {
+		return nil, fmt.Errorf("set GATE_GUILDS, GATE_USERS or both")
+	}
+	// one picker and one template namespace, so a label names one group
+	for _, u := range c.users {
+		for _, g := range c.guilds {
+			if u.Label == g.Label {
+				return nil, fmt.Errorf("label %q is in both GATE_GUILDS and GATE_USERS", u.Label)
+			}
+		}
+	}
 	for _, id := range strings.FieldsFunc(os.Getenv("GATE_ADMIN_DISCORD_IDS"), isSep) {
 		c.adminIDs[id] = true
 	}
@@ -96,24 +117,48 @@ func isSep(r rune) bool { return r == ',' || r == ';' || r == ' ' }
 // parseGuilds reads "2026=1386246992589619231,2027=..." keeping config order
 // (the picker lists groups in this order).
 func parseGuilds(s string) ([]guildEntry, error) {
-	var out []guildEntry
+	pairs, err := parseLabeled("GATE_GUILDS", "guildID", s)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]guildEntry, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, guildEntry{Label: p[0], GuildID: p[1]})
+	}
+	return out, nil
+}
+
+// parseUsers reads "alice=123456789012345678,..."; the label is the
+// account name under the {label} template.
+func parseUsers(s string) ([]userEntry, error) {
+	pairs, err := parseLabeled("GATE_USERS", "discordUserID", s)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]userEntry, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, userEntry{Label: p[0], UserID: p[1]})
+	}
+	return out, nil
+}
+
+// parseLabeled reads comma-separated label=value pairs in config order.
+func parseLabeled(name, value, s string) ([][2]string, error) {
+	var out [][2]string
 	seen := map[string]bool{}
 	for _, pair := range strings.FieldsFunc(s, isSep) {
-		label, guild, ok := strings.Cut(pair, "=")
-		if !ok || label == "" || guild == "" {
-			return nil, fmt.Errorf("invalid GATE_GUILDS entry: %q (want label=guildID)", pair)
+		label, v, ok := strings.Cut(pair, "=")
+		if !ok || label == "" || v == "" {
+			return nil, fmt.Errorf("invalid %s entry: %q (want label=%s)", name, pair, value)
 		}
 		if label == "admin" {
-			return nil, fmt.Errorf(`GATE_GUILDS label "admin" is reserved`)
+			return nil, fmt.Errorf(`%s label "admin" is reserved`, name)
 		}
 		if seen[label] {
-			return nil, fmt.Errorf("duplicate GATE_GUILDS label: %q", label)
+			return nil, fmt.Errorf("duplicate %s label: %q", name, label)
 		}
 		seen[label] = true
-		out = append(out, guildEntry{Label: label, GuildID: guild})
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("GATE_GUILDS is empty")
+		out = append(out, [2]string{label, v})
 	}
 	return out, nil
 }
@@ -153,7 +198,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		// no Read/WriteTimeout so large uploads are not killed
 	}
-	log.Printf("listening on %s → %s (guilds: %v)", cfg.listen, cfg.upstream, cfg.guilds)
+	log.Printf("listening on %s → %s (guilds: %v, users: %v)", cfg.listen, cfg.upstream, cfg.guilds, cfg.users)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -215,7 +260,7 @@ func (a *app) usernameFor(s *session) string {
 	if s.Group == "admin" {
 		return "admin"
 	}
-	return strings.NewReplacer("{label}", s.Group, "{lang}", s.Lang).Replace(a.cfg.usernameTmpl)
+	return strings.NewReplacer("{label}", s.Group, "{lang}", s.Lang, "{user_id}", s.UserID).Replace(a.cfg.usernameTmpl)
 }
 
 // pickLang chooses ja / en from an Accept-Language header.

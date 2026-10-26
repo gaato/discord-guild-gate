@@ -79,10 +79,65 @@ func TestParseGuilds(t *testing.T) {
 	if len(gs) != 2 || gs[0].Label != "2027" || gs[1].GuildID != "111" {
 		t.Fatalf("unexpected: %+v", gs)
 	}
-	for _, bad := range []string{"2026", "", "admin=123", "a=1,a=2"} {
+	for _, bad := range []string{"2026", "admin=123", "a=1,a=2"} {
 		if _, err := parseGuilds(bad); err == nil {
 			t.Errorf("parseGuilds(%q) should fail", bad)
 		}
+	}
+	// optional on its own: loadConfig requires GATE_GUILDS or GATE_USERS
+	if gs, err := parseGuilds(""); err != nil || len(gs) != 0 {
+		t.Fatalf("empty GATE_GUILDS: %v %+v", err, gs)
+	}
+}
+
+func TestParseUsers(t *testing.T) {
+	us, err := parseUsers("alice=123, bob=456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(us) != 2 || us[0].Label != "alice" || us[1].UserID != "456" {
+		t.Fatalf("unexpected: %+v", us)
+	}
+	for _, bad := range []string{"123", "admin=123", "a=1,a=2"} {
+		if _, err := parseUsers(bad); err == nil {
+			t.Errorf("parseUsers(%q) should fail", bad)
+		}
+	}
+}
+
+func TestLoadConfigNeedsGuildsOrUsers(t *testing.T) {
+	t.Setenv("GATE_BASE_URL", "https://files.example.com")
+	t.Setenv("DISCORD_CLIENT_ID", "id")
+	t.Setenv("DISCORD_CLIENT_SECRET", "secret")
+	t.Setenv("GATE_COOKIE_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("GATE_UPSTREAM", "http://127.0.0.1:8080")
+	t.Setenv("GATE_GUILDS", "")
+	t.Setenv("GATE_USERS", "")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("neither GATE_GUILDS nor GATE_USERS: should fail")
+	}
+	t.Setenv("GATE_USERS", "alice=123")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.users) != 1 || len(c.guilds) != 0 {
+		t.Fatalf("unexpected: %+v %+v", c.users, c.guilds)
+	}
+	t.Setenv("GATE_GUILDS", "alice=999")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("label in both lists: should fail")
+	}
+}
+
+func TestScope(t *testing.T) {
+	a := testApp(t, "http://upstream")
+	if got := a.scope(); got != "identify guilds" {
+		t.Fatalf("with guilds: %q", got)
+	}
+	a.cfg.guilds = nil
+	if got := a.scope(); got != "identify" {
+		t.Fatalf("users only: %q", got)
 	}
 }
 
@@ -116,6 +171,13 @@ func TestUsernameFor(t *testing.T) {
 	a.cfg.usernameTmpl = "{label}"
 	if got := a.usernameFor(&session{Group: "2026", Lang: "ja"}); got != "2026" {
 		t.Fatalf("default template: got %q", got)
+	}
+	a.cfg.usernameTmpl = "{user_id}"
+	if got := a.usernameFor(&session{UserID: "123456789012345678", Group: "2026", Lang: "ja"}); got != "123456789012345678" {
+		t.Fatalf("user_id template: got %q", got)
+	}
+	if got := a.usernameFor(&session{UserID: "123456789012345678", Group: "admin", Lang: "ja"}); got != "admin" {
+		t.Fatalf("user_id template, admin: got %q", got)
 	}
 }
 

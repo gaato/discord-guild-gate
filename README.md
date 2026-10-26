@@ -3,14 +3,24 @@
 An authorization gateway that fronts a private web app trusting a
 username header — such as [File Browser](https://filebrowser.org/) with
 `auth.method=proxy`. Users sign in with Discord OAuth2
-(`identify guilds`, no bot required), their guild memberships are mapped
-to configured *groups*, and the selected group's shared account name is
-forwarded to the upstream in the `X-Username` header.
+(`identify guilds`, no bot required), their guild memberships, or their
+user ID on an allowlist, are mapped to configured *groups*, and the
+selected group's account name is forwarded to the upstream in the
+`X-Username` header.
 
-- If exactly one configured guild matches, the user is let straight in;
+- If exactly one configured group matches, the user is let straight in;
   with multiple matches a picker page is shown.
+- `GATE_USERS` allowlists Discord users by ID, with or without
+  `GATE_GUILDS`. IDs rather than usernames, because a username can be
+  changed and a released one taken by someone else. A user who is not
+  allowed sees their own ID on the error page, to send to the
+  administrator. With `GATE_USERS` alone, only the `identify` scope is
+  requested.
 - The account name is derived from `GATE_USERNAME_TEMPLATE`
   (default `{label}`; e.g. `{lang}{label}` yields `ja2026` / `en2026`).
+  Use `{user_id}` for one account per Discord user instead of a shared
+  one per guild; the ID is used rather than the username because users
+  can rename themselves.
   The UI language (`ja` / `en`) is auto-detected from `Accept-Language`
   and can be switched on the picker.
 - Discord users listed in `GATE_ADMIN_DISCORD_IDS` can also select the
@@ -32,7 +42,8 @@ forwarded to the upstream in the `X-Username` header.
 | `GATE_COOKIE_SECRET` | `openssl rand -hex 32` | Session signing key (32+ chars) |
 | `GATE_UPSTREAM` | `http://127.0.0.1:8080` | Upstream URL |
 | `GATE_GUILDS` | `2026=1386…,2027=1525…` | Comma-separated `label=guildID`; picker order = config order. `admin` is a reserved label |
-| `GATE_USERNAME_TEMPLATE` | `{lang}{label}` | Upstream account name template; placeholders `{label}` and `{lang}` (default `{label}`) |
+| `GATE_USERS` | `alice=1234…,bob=5678…` | Comma-separated `label=discordUserID`, listed after the guilds in the picker. Labels must not repeat a `GATE_GUILDS` label. At least one of `GATE_GUILDS` and `GATE_USERS` is required |
+| `GATE_USERNAME_TEMPLATE` | `{lang}{label}` | Upstream account name template; placeholders `{label}`, `{lang}` and `{user_id}` (Discord user ID) (default `{label}`) |
 | `GATE_ADMIN_DISCORD_IDS` | `123,456` | Discord user IDs allowed to pick `admin` (optional) |
 | `GATE_SESSION_TTL` | `24h` | Session lifetime (default `24h`); guild membership is re-checked on expiry |
 | `GATE_TITLE_JA` / `GATE_TITLE_EN` | `My Uploader` | Page title per language (default `Discord Guild Gate`) |
@@ -43,7 +54,8 @@ forwarded to the upstream in the `X-Username` header.
 
 Add `<GATE_BASE_URL>/auth/callback` to OAuth2 → Redirects. No bot is
 needed: membership is checked with `GET /users/@me/guilds` using the
-`guilds` scope (up to 200 guilds per user).
+`guilds` scope (up to 200 guilds per user), which is requested only when
+`GATE_GUILDS` is set.
 
 ## File Browser setup
 
@@ -52,10 +64,13 @@ filebrowser config set --auth.method=proxy --auth.header=X-Username \
   --auth.logoutPage=/auth/logout
 ```
 
-Create the shared accounts (e.g. `ja2026`) beforehand. Switching to
-proxy auth disables password login. `--auth.logoutPage=/auth/logout`
-makes File Browser's own logout button clear the gate session instead
-of instantly re-authenticating via the header.
+Create the shared accounts (e.g. `ja2026`) beforehand. With one
+account per user (`{user_id}`, or `GATE_USERS` under `{label}`), File
+Browser's proxy auth creates unknown users on first access instead; enable `--createUserDir` so each gets their own home
+directory as scope. Switching to proxy auth disables password login.
+`--auth.logoutPage=/auth/logout` makes File Browser's own logout button
+clear the gate session instead of instantly re-authenticating via the
+header.
 
 ## Container image
 

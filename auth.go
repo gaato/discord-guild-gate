@@ -69,23 +69,36 @@ func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
 			"Failed to fetch your Discord profile.")
 		return
 	}
-	guilds, err := a.fetchGuildIDs(ctx, token)
-	if err != nil {
-		log.Printf("callback: %v", err)
-		a.errorPage(w, http.StatusBadGateway, "Discord サーバー一覧の取得に失敗しました。",
-			"Failed to fetch your Discord server list.")
-		return
-	}
-
 	var groups []string
-	for _, g := range a.cfg.guilds {
-		if guilds[g.GuildID] {
-			groups = append(groups, g.Label)
+	if len(a.cfg.guilds) > 0 {
+		guilds, err := a.fetchGuildIDs(ctx, token)
+		if err != nil {
+			log.Printf("callback: %v", err)
+			a.errorPage(w, http.StatusBadGateway, "Discord サーバー一覧の取得に失敗しました。",
+				"Failed to fetch your Discord server list.")
+			return
+		}
+		for _, g := range a.cfg.guilds {
+			if guilds[g.GuildID] {
+				groups = append(groups, g.Label)
+			}
+		}
+	}
+	for _, u := range a.cfg.users {
+		if u.UserID == user.ID {
+			groups = append(groups, u.Label)
 		}
 	}
 	admin := a.cfg.adminIDs[user.ID]
 	if len(groups) == 0 && !admin {
-		log.Printf("denied: %s (%s) is not in any configured guild", user.Username, user.ID)
+		log.Printf("denied: %s (%s) is not in any configured guild or the user allowlist", user.Username, user.ID)
+		if len(a.cfg.guilds) == 0 {
+			// show the ID so the user can send it for the allowlist
+			a.errorPage(w, http.StatusForbidden,
+				"この Discord アカウントには利用許可がありません。利用したい場合は、次のユーザーID を管理者に伝えてください: "+user.ID,
+				"This Discord account is not allowed. To get access, send this user ID to the administrator: "+user.ID)
+			return
+		}
 		a.errorPage(w, http.StatusForbidden,
 			"対象の Discord サーバーへの参加が確認できませんでした。参加済みなのにこの画面が出る場合は運営までご連絡ください。",
 			"We could not confirm your membership in a required Discord server. If you believe this is an error, please contact the staff.")

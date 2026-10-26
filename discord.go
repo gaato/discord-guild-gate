@@ -21,11 +21,19 @@ func (a *app) authorizeURL(state string) string {
 		"client_id":     {a.cfg.clientID},
 		"response_type": {"code"},
 		"redirect_uri":  {a.redirectURI()},
-		"scope":         {"identify guilds"},
+		"scope":         {a.scope()},
 		"state":         {state},
 		"prompt":        {"none"}, // skip the consent screen if already authorized
 	}
 	return "https://discord.com/oauth2/authorize?" + q.Encode()
+}
+
+// scope asks for the server list only when guild membership is checked.
+func (a *app) scope() string {
+	if len(a.cfg.guilds) == 0 {
+		return "identify"
+	}
+	return "identify guilds"
 }
 
 func (a *app) exchangeCode(ctx context.Context, code string) (string, error) {
